@@ -129,7 +129,7 @@ setup_config (GError **error, const char *config_file, const char *intern_config
 		NMDhcpManager *dhcp_manager;
 		gpointer logging_old_state;
 
-		logging_old_state = nmtst_logging_disable ();
+		logging_old_state = nmtst_logging_disable (FALSE);
 
 		dhcp_manager = nm_dhcp_manager_get ();
 		g_test_assert_expected_messages ();
