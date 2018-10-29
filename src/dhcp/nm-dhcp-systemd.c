@@ -652,6 +652,7 @@ ip4_start (NMDhcpClient *client,
 	if (last_ip4_address)
 		inet_pton (AF_INET, last_ip4_address, &last_addr);
 	else if (lease)
+		/* FIXME: should we honor the address only if the client-id matches? */
 		sd_dhcp_lease_get_address (lease, &last_addr);
 
 	if (last_addr.s_addr) {
@@ -663,17 +664,6 @@ ip4_start (NMDhcpClient *client,
 	}
 
 	client_id = nm_dhcp_client_get_client_id (client);
-	if (   !client_id
-	    && lease) {
-		r = sd_dhcp_lease_get_client_id (lease,
-		                                 (const void **) &client_id_arr,
-		                                 &client_id_len);
-		if (   r >= 0
-		    && client_id_len >= 2) {
-			client_id_new = g_bytes_new (client_id_arr, client_id_len);
-			client_id = client_id_new;
-		}
-	}
 	if (!client_id) {
 		client_id_new = nm_sd_utils_generate_default_dhcp_client_id (ifindex, hwaddr_arr, hwaddr_len);
 		client_id = client_id_new;
