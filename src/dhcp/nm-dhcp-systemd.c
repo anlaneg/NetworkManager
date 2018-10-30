@@ -665,8 +665,14 @@ ip4_start (NMDhcpClient *client,
 
 	client_id = nm_dhcp_client_get_client_id (client);
 	if (!client_id) {
-		client_id_new = nm_sd_utils_generate_default_dhcp_client_id (ifindex, hwaddr_arr, hwaddr_len);
-		client_id = client_id_new;
+		gs_free char *machine_id = NULL;
+
+		machine_id = nm_utils_machine_id_read ();
+		if (machine_id) {
+			client_id_new = nm_utils_dhcp_client_id_systemd_node_specific (nm_dhcp_client_get_iface (client),
+			                                                               machine_id);
+			client_id = client_id_new;
+		}
 	}
 
 	if (   !client_id

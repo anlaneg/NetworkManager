@@ -895,11 +895,12 @@ set_property (GObject *object, guint prop_id,
 	case PROP_IFACE:
 		/* construct-only */
 		priv->iface = g_value_dup_string (value);
+		nm_assert (priv->iface && nm_utils_is_valid_iface_name (priv->iface, NULL));
 		break;
 	case PROP_IFINDEX:
 		/* construct-only */
 		priv->ifindex = g_value_get_int (value);
-		g_warn_if_fail (priv->ifindex > 0);
+		nm_assert (priv->ifindex > 0);
 		break;
 	case PROP_HWADDR:
 		/* construct-only */
