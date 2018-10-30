@@ -1916,91 +1916,57 @@ test_machine_id_read (void)
 static void
 test_nm_sd_utils_generate_default_dhcp_client_id (gconstpointer test_data)
 {
+	const int TEST_IDX = GPOINTER_TO_INT (test_data);
 	const guint8 HASH_KEY[16] = { 0x80, 0x11, 0x8c, 0xc2, 0xfe, 0x4a, 0x03, 0xee, 0x3e, 0xd6, 0x0c, 0x6f, 0x36, 0x39, 0x14, 0x09 };
-	/* We run the test twice with two ifindexes.
-	 *
-	 * One is "1", which we expect to exist and having a name "lo".
-	 * The other is a random number, which we expect not to exist.
-	 *
-	 * Regardless of whether the ifindex actually exists, the tests are
-	 * supposed to pass. However, we our expectations are not met, we
-	 * silently miss test cases. */
-	const int IFINDEX = GPOINTER_TO_INT (test_data)
-	                    ? 1
-	                    : (int) (nmtst_get_rand_int () % 10000);
-	const guint8 mac_addr[ETH_ALEN] = { 0x20, 0xAF, 0x51, 0x42, 0x29, 0x05 };
 	const guint16 duid_type_en = htons (2);
 	const guint32 systemd_pen = htonl (43793);
-	guint32 iaid_mac;
-	guint32 iaid_ifname;
+	const struct {
+		const char *ifname;
+		NMUuid machine_id;
+		guint64 ifname_hash_1;
+		guint32 iaid_ifname;
+	} d_array[] = {
+		[0] = {
+			.machine_id = { 0xd1, 0xa6, 0x66, 0x77, 0x20, 0xdb, 0x4c, 0x47, 0x80, 0xc1, 0xfc, 0x02, 0xed, 0x7d, 0xb4, 0xa4 },
+			.ifname = "lo",
+			.ifname_hash_1 = htole64 (8257077633759758609llu),
+			.iaid_ifname = htonl (1501937997u),
+		},
+		[1] = {
+			.machine_id = { 0x11, 0x4e, 0xb4, 0xda, 0xd3, 0x22, 0x4a, 0xff, 0x9f, 0xc3, 0x30, 0x83, 0x38, 0xa0, 0xeb, 0xb7 },
+			.ifname = "eth0",
+			.ifname_hash_1 = htole64 (0x9E1CB083B54CD7B6llu),
+			.iaid_ifname = htonl (726689589u),
+		},
+	};
+	typeof (d_array[0]) *d = &d_array[TEST_IDX];
 	gs_unref_bytes GBytes *client_id = NULL;
-	char ifname_buf[IFNAMSIZ];
-	const char *ifname;
-	gboolean has_ifindex;
 	gint64 u64;
 	guint32 u32;
 	const guint8 *cid;
-	const NMUuid *machine_id;
 
-	/* see whether IFINDEX exists. */
-	if (if_indextoname (IFINDEX, ifname_buf)) {
-		ifname = ifname_buf;
-		has_ifindex = TRUE;
-	} else {
-		ifname = "lo";
-		has_ifindex = FALSE;
-	}
+	/* while we re-do the hashing as it's performed by the function we test,
+	 * additionally assert the expected values for the hashing itself. */
+	u64 = c_siphash_hash (HASH_KEY, (const guint8 *) d->ifname, strlen (d->ifname));
+	u64 = htole64 (u64);
+	g_assert_cmpint (u64, ==, d->ifname_hash_1);
+	u32 = htonl (u64 & 0xffffffff) ^ (u64 >> 32);
+	g_assert_cmpint (u32, ==, d->iaid_ifname);
 
-	/* generate the iaid based on the ifname and assert for expected
-	 * values.
-	 *
-	 * We often expect that the interface name is "lo". Hence, assert
-	 * for the expected hash values explicitly. */
-	u64 = htole64 (c_siphash_hash (HASH_KEY, (const guint8 *) ifname, strlen (ifname)));
-	if (nm_streq (ifname, "lo"))
-		g_assert_cmpint (u64, ==, htole64 (0x7297085C2B12C911llu));
-	u32 = (u64 & 0xFFFFFFFFu) ^ (u64 >> 32);
-	iaid_ifname = htonl (u32);
-	if (nm_streq (ifname, "lo"))
-		g_assert_cmpint (iaid_ifname, ==, htonl (0x5985C14Du));
+	client_id = nm_utils_dhcp_client_id_systemd_node_specific_full ((const guint8 *) d->ifname,
+	                                                                strlen (d->ifname),
+	                                                                (const guint8 *) &d->machine_id,
+	                                                                sizeof (d->machine_id));
 
-	/* generate the iaid based on the hard-coded MAC address */
-	u64 = htole64 (c_siphash_hash (HASH_KEY, mac_addr, sizeof (mac_addr)));
-	g_assert_cmpint (u64, ==, htole64 (0x1F3D1D8D15DE49DCllu));
-	u32 = (u64 & 0xFFFFFFFFu) ^ (u64 >> 32);
-	iaid_mac = htonl (u32);
-	g_assert_cmpint (iaid_mac, ==, htonl (0x0aE35451u));
-
-	/* as it is, nm_sd_utils_generate_default_dhcp_client_id() resolves the ifname (based on the
-	 * ifindex) and loads /etc/machine-id. Maybe the code should be refactored, to accept
-	 * such external input as arguments (to ease testing).
-	 *
-	 * Instead, we just duplicate the steps here, which are don't internally by the
-	 * function. Hey, it's a test. Let's re-implement what the code does here. */
-	client_id = nm_sd_utils_generate_default_dhcp_client_id (IFINDEX, mac_addr, sizeof (mac_addr));
-
-	if (!client_id) {
-		/* the only reason why this can fail, is because /etc/machine-id is invalid. */
-		if (!g_file_test ("/etc/machine-id", G_FILE_TEST_EXISTS)) {
-			g_test_skip ("no /etc/machine-id");
-			return;
-		}
-		g_assert_not_reached ();
-	}
-
+	g_assert (client_id);
 	g_assert_cmpint (g_bytes_get_size (client_id), ==, 19);
 	cid = g_bytes_get_data (client_id, NULL);
 
 	g_assert_cmpint (cid[0], ==, 255);
-	if (has_ifindex)
-		g_assert_cmpmem (&cid[1], 4, &iaid_ifname, sizeof (iaid_ifname));
-	else
-		g_assert_cmpmem (&cid[1], 4, &iaid_mac, sizeof (iaid_mac));
+	g_assert_cmpmem (&cid[1], 4, &d->iaid_ifname, sizeof (d->iaid_ifname));
 	g_assert_cmpmem (&cid[5], 2, &duid_type_en, sizeof (duid_type_en));
 	g_assert_cmpmem (&cid[7], 4, &systemd_pen, sizeof (systemd_pen));
-
-	machine_id = nm_utils_machine_id_bin ();
-	u64 = htole64 (c_siphash_hash (HASH_KEY, (const guint8 *) machine_id, sizeof (*machine_id)));
+	u64 = htole64 (c_siphash_hash (HASH_KEY, (const guint8 *) &d->machine_id, sizeof (d->machine_id)));
 	g_assert_cmpmem (&cid[11], 8, &u64, sizeof (u64));
 }
 
@@ -2056,8 +2022,8 @@ main (int argc, char **argv)
 
 	g_test_add_func ("/general/test_utils_file_is_in_path", test_utils_file_is_in_path);
 
-	g_test_add_data_func ("/general/nm_sd_utils_generate_default_dhcp_client_id/lo",  GINT_TO_POINTER (TRUE),  test_nm_sd_utils_generate_default_dhcp_client_id);
-	g_test_add_data_func ("/general/nm_sd_utils_generate_default_dhcp_client_id/rnd", GINT_TO_POINTER (FALSE), test_nm_sd_utils_generate_default_dhcp_client_id);
+	g_test_add_data_func ("/general/nm_sd_utils_generate_default_dhcp_client_id/0", GINT_TO_POINTER (0), test_nm_sd_utils_generate_default_dhcp_client_id);
+	g_test_add_data_func ("/general/nm_sd_utils_generate_default_dhcp_client_id/1", GINT_TO_POINTER (1), test_nm_sd_utils_generate_default_dhcp_client_id);
 
 	return g_test_run ();
 }

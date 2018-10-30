@@ -39,6 +39,7 @@
 
 #include "nm-utils/nm-random-utils.h"
 #include "nm-utils/nm-io-utils.h"
+#include "nm-utils/unaligned.h"
 #include "nm-utils.h"
 #include "nm-core-internal.h"
 #include "nm-setting-connection.h"
@@ -3257,6 +3258,82 @@ nm_utils_hw_addr_gen_stable_eth (NMUtilsStableType stable_type,
 	                                ifname,
 	                                current_mac_address,
 	                                generate_mac_address_mask);
+}
+
+/*****************************************************************************/
+
+/**
+ * nm_utils_dhcp_client_id_systemd_node_specific:
+ * @interface_id: a binary identifer that is hashed into the DUID.
+ *   Comonly this is the interface-name, but it may be the MAC address.
+ * @interface_id_len: the length of @interface_id.
+ * @machine_id: the binary identifier for the machine. It is hashed
+ *   into the DUID. It commonly is /etc/machine-id (parsed in binary as NMUuid).
+ * @machine_id_len: the length of the @machine_id.
+ *
+ * Systemd's sd_dhcp_client generates a default client ID (type 255, node-specific,
+ * RFC 4361) if no explicit client-id is set. This function duplicates that
+ * implementation and exposes it as (internal) API.
+ *
+ * Returns: a %GBytes of generated client-id. This function cannot fail.
+ */
+GBytes *
+nm_utils_dhcp_client_id_systemd_node_specific_full (const guint8 *interface_id,
+                                                    gsize interface_id_len,
+                                                    const guint8 *machine_id,
+                                                    gsize machine_id_len)
+{
+	const guint8 HASH_KEY[16] = { 0x80, 0x11, 0x8c, 0xc2, 0xfe, 0x4a, 0x03, 0xee, 0x3e, 0xd6, 0x0c, 0x6f, 0x36, 0x39, 0x14, 0x09 };
+	const guint16 DUID_TYPE_EN = 2;
+	const guint32 SYSTEMD_PEN = 43793;
+	struct _nm_packed {
+		guint8 type;
+		guint32 iaid;
+		struct _nm_packed {
+			guint16 type;
+			union {
+				struct _nm_packed {
+						/* DUID_TYPE_EN */
+						guint32 pen;
+						uint8_t id[8];
+				} en;
+			};
+		} duid;
+	} *client_id;
+	guint64 id64;
+
+	g_return_val_if_fail (interface_id, NULL);
+	g_return_val_if_fail (interface_id_len > 0, NULL);
+	g_return_val_if_fail (machine_id, NULL);
+	g_return_val_if_fail (machine_id_len > 0, NULL);
+
+	client_id = g_malloc (sizeof (*client_id));
+
+	client_id->type = 255;
+
+	id64 = htole64 (c_siphash_hash (HASH_KEY, interface_id, interface_id_len));
+	unaligned_write_be32 (&client_id->iaid, ((guint32) (id64 & 0xffffffffu)) ^ ((guint32) (id64 >> 32)));
+
+	unaligned_write_be16 (&client_id->duid.type, DUID_TYPE_EN);
+
+	unaligned_write_be32 (&client_id->duid.en.pen, SYSTEMD_PEN);
+
+	id64 = htole64 (c_siphash_hash (HASH_KEY, machine_id, machine_id_len));
+	memcpy(client_id->duid.en.id, &id64, sizeof (client_id->duid.en.id));
+
+	G_STATIC_ASSERT_EXPR (sizeof (*client_id) == 19);
+	return g_bytes_new_take (client_id, 19);
+}
+
+GBytes *
+nm_utils_dhcp_client_id_systemd_node_specific (const char *ifname)
+{
+	g_return_val_if_fail (ifname && ifname[0], NULL);
+
+	return nm_utils_dhcp_client_id_systemd_node_specific_full ((const guint8 *) ifname,
+	                                                           strlen (ifname),
+	                                                           (const guint8 *) nm_utils_machine_id_bin (),
+	                                                           sizeof (NMUuid));
 }
 
 /*****************************************************************************/
