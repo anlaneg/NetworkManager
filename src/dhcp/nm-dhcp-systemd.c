@@ -665,19 +665,16 @@ ip4_start (NMDhcpClient *client,
 
 	client_id = nm_dhcp_client_get_client_id (client);
 	if (!client_id) {
-		gs_free char *machine_id = NULL;
-
-		machine_id = nm_utils_machine_id_read ();
-		if (machine_id) {
-			client_id_new = nm_utils_dhcp_client_id_systemd_node_specific (nm_dhcp_client_get_iface (client),
-			                                                               machine_id);
-			client_id = client_id_new;
-		}
+		client_id_new = nm_utils_dhcp_client_id_systemd_node_specific (nm_dhcp_client_get_iface (client));
+		client_id = client_id_new;
 	}
 
-	if (   !client_id
-	    || !(client_id_arr = g_bytes_get_data (client_id, &client_id_len))
+	if (   !(client_id_arr = g_bytes_get_data (client_id, &client_id_len))
 	    || client_id_len < 2) {
+
+		/* invalid client-ids are not expected. */
+		nm_assert_not_reached ();
+
 		nm_utils_error_set_literal (error, NM_UTILS_ERROR_UNKNOWN, "no valid IPv4 client-id");
 		goto errout;
 	}
